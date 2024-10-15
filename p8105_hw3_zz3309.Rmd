@@ -1,0 +1,257 @@
+---
+title: "P8105_hw3_zz3309"
+author: "Zebang Zhang"
+date: 2024-10-14
+output: github_document
+---
+
+```{r}
+#show libraries used
+library(tidyverse)
+library(patchwork)
+library(ggridges)
+```
+
+## Problem 1
+
+```{r}
+library(p8105.datasets)
+data("ny_noaa")
+```
+
+The NY NOAA dataset contains `r nrow(ny_noaa)` rows and `r ncol(ny_noaa)` columns. Variables include weather station id, date, precipitation, snowfall, snow  depth, and min and max temperature.
+
+```{r}
+ny_noaa %>% 
+  count(snow) %>%
+  arrange(desc(n))
+
+# data cleaning
+ny_noaa = 
+  ny_noaa %>% 
+  separate(date, into = c("year", "month", "day"), convert = TRUE) %>% 
+  mutate(
+    tmax = as.numeric(tmax),
+    tmin = as.numeric(tmin))
+```
+
+We find that 0 is the most commonly observed value for snowfall. This is because most days of the year, it does not snow at all in NY. The second most commonly observed value is `NA`, indicating missingness.
+
+```{r}
+ny_noaa %>% 
+  group_by(id, year, month) %>% 
+  filter(month %in% c(1, 7)) %>% 
+  summarize(mean_tmax = mean(tmax, na.rm = TRUE, color = id)) %>% 
+  ggplot(aes(x = year, y = mean_tmax, group = id)) + geom_point() + geom_path() +
+  facet_grid(~month) +
+  labs(title = "Mean monthly temperature for each station across years for January and July")
+```
+
+The mean temperature in January is much lower than the mean temperature in July for all stations and across all years. All stations appear to follow similar trends of temperature peaks and valleys within a month across the years. We do see one uncharacteristically cold station in July of 1987 or 1988, as well as a few other less drastic outliers.
+
+Make a two-panel plot showing (i) tmax vs tmin for the full dataset; and (ii) make a plot showing the distribution of snowfall values greater than 0 and less than 100 separately by year.
+```{r}
+hex = 
+  ny_noaa %>% 
+  ggplot(aes(x = tmin, y = tmax)) + 
+  geom_hex()
+
+ridge = 
+  ny_noaa %>% 
+  filter(snow < 100, snow > 0) %>%
+  ggplot(aes(x = snow, y = as.factor(year))) + 
+  geom_density_ridges()
+
+hex + ridge
+```
+
+## Problem 2
+
+First, load, tidy, merge, and organize the data sets. I excluded participants less than 21 years of age, and those with missing demographic data; I also encoded data with reasonable variable classes.
+```{r}
+accel = read_csv("./nhanes/nhanes_accel.csv")
+covar = read_csv("./nhanes/nhanes_covar.csv", skip = 4)
+
+combined_data = inner_join(covar, accel, by = "SEQN") %>%
+  janitor::clean_names() %>%
+  filter(age >= 21) %>%
+  mutate(sex = if_else(sex == 1, "male", "female")) %>%
+  mutate(education = case_when(
+    education == 1 ~ "Less than high school",
+    education == 2 ~ "High school equivalent",
+    education == 3 ~ "More than high school"
+  )) %>%
+  mutate(sex = factor(sex, levels = c("male","female"), ordered = TRUE)) %>%
+  mutate(education = factor(education, levels = c("Less than high school", "High school equivalent", "More than high school"), ordered = TRUE))  %>%
+  filter(!is.na(sex) & !is.na(age) & !is.na(bmi) & !is.na(education))
+
+combined_data
+```
+
+I also used pivot_longer() to show the final dataset in another form.
+```{r}
+combined_longer = combined_data %>%
+  pivot_longer(min1:min1440,names_to = "time_min", values_to = "min_activity") %>%
+  na.omit()
+
+combined_longer
+```
+
+Then produce a reader-friendly table for the number of men and women in each education category, and create a visualization of the age distributions for men and women in each education category.
+```{r}
+edu_sex_table <- combined_data %>%
+  group_by(sex, education) %>%
+  summarise(count = n()) %>%
+  spread(key = sex, value = count)
+
+edu_sex_table
+```
+
+From the table, we can conclude that the numbers of men and women in 'Less than high school' and 'More than high school' education level are alike, but in 'High school equivalent' level, there are obviously more male participants than female participants.
+
+```{r}
+age_distribution_plot = ggplot(combined_data, aes(x = education, y = age, fill = sex)) +
+  geom_boxplot() +
+  labs(title = "Age Distributions by Sex and Education",
+       x = "Education Level",
+       y = "Age") +
+  theme_minimal() +
+  scale_fill_manual(values = c("male" = "lightblue", "female" = "lightpink"))
+
+age_distribution_plot
+```
+
+We can see from the boxplot that in 'Less than high school' and 'More than high school' education level, the median of male age and female age are close, but in 'High school equivalent' level, age distribution by sex is quite different, female age median is much greater than male age median.
+
+Plot total activities (y-axis) against age (x-axis); this plot compares men to women, have separate panels for each education level and include a trend line.
+```{r}
+# calculate the total activity
+total_act = combined_longer %>%
+  group_by(seqn,sex,age,education) %>%
+  summarise(total = sum(min_activity)) 
+
+act_plot = ggplot(total_act, aes(x = age, y = total, color = sex)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(se = FALSE) +
+  facet_wrap(~ education) +
+  labs(title = "Total Activity by Age, Sex, and Education Level",
+       x = "Age",
+       y = "Total Activity") +
+  theme_minimal()
+
+act_plot
+```
+
+From the plot, it can be concluded that: in three education levels, the overall trend of total activity is decreasing as age increase, although sometimes total activity increases while age increases. In the three education levels,when it comes to the age of 80, men and women have similar total activity level. In 'Less than high school' level, the speed that total activity decreases as age increases is faster than that in the other two education levels. 
+
+Make a three-panel plot that shows the 24-hour activity time courses for each education level and use color to indicate sex.
+```{r}
+combined_longer_new = combined_longer %>%
+  mutate(time_min = as.numeric(gsub("min", "", time_min))) %>%
+  arrange(time_min)
+
+plot_24h = ggplot(combined_longer_new, aes(x = time_min, y = min_activity, color = sex)) +
+  geom_point(alpha = 0.5) +
+  facet_wrap(~ education, nrow = 2) +
+  geom_smooth(se = FALSE) +
+  labs(title = "24-hour Activity Time Courses for Each Education Level and Sex",
+       x = "Time",
+       y = "Activity")+
+  theme_minimal()
+
+plot_24h
+```
+
+It can be concluded that the trend lines for male and female are very alike, which indicates that there are no significant differences for their 24-hour activity between sex. The trends in three education levels are similar too, indicating there are no significant difference for 24-hour activity among the three education levels.
+
+## Problem 3
+
+First import, clean, and tidy citi data, then describe the resulting dataset.
+```{r}
+jan_2020 <- read.csv("./citibike/Jan 2020 Citi.csv") %>%
+  mutate(year = as.factor(2020), month = as.factor(1)) %>%
+  janitor::clean_names() 
+
+jan_2024 <- read.csv("./citibike/Jan 2024 Citi.csv") %>%
+  mutate(year = as.factor(2024), month = as.factor(1)) %>%
+  janitor::clean_names()
+
+july_2020 <- read.csv("./citibike/July 2020 Citi.csv") %>%
+  mutate(year = as.factor(2020), month = as.factor(7)) %>%
+  janitor::clean_names()
+
+july_2024 <- read.csv("./citibike/July 2024 Citi.csv") %>%
+  mutate(year = as.factor(2024), month = as.factor(7)) %>%
+  janitor::clean_names()
+
+citi_clean <- bind_rows(jan_2020,jan_2024,july_2020,july_2024) %>%
+  mutate(
+    rideable_type = as.factor(rideable_type),
+    member_casual = as.factor(member_casual),
+    start_station_name = as.factor(start_station_name),
+    end_station_name = as.factor(end_station_name),
+    weekdays = as.factor(weekdays),
+    duration = as.numeric(duration)
+  ) %>%
+  na.omit()
+
+citi_clean
+```
+
+The resulting dataset contains `r nrow(citi_clean)` rows and `r ncol(citi_clean)` columns. Variables include ride_id, rideable_type, weekdays, duration, start_station_name, end_station_name, member_casual, year and month. I created year and month variables so that I can distinguish the time of each observation.
+
+Produce a reader-friendly table showing the total number of rides in each combination of year and month separating casual riders and Citi Bike members. 
+```{r}
+summary_table <- citi_clean %>%
+  group_by(year, month , member_casual) %>%
+  summarise(total_rides = n()) %>%
+  pivot_wider(names_from = member_casual, values_from = total_rides, names_prefix = "count_")
+
+summary_table
+```
+
+We can see that in both 2020 and 2024, there are more rides in July than in January, maybe it is because it is warmer in July, Moreover, in every combination of year and month, the number of rides from Citi Bike members is much greater than that from casual riders.
+
+Make a table showing the 5 most popular starting stations for July 2024; include the number of rides originating from these stations.
+```{r}
+popular_stations <- citi_clean %>%
+  filter(year == 2024, month == 7) %>%
+  group_by(start_station_name) %>%
+  summarise(num_rides = n()) %>%
+  arrange(desc(num_rides)) %>%
+  slice_head(n = 5)
+
+popular_stations
+```
+
+Make a plot to investigate the effects of day of the week, month, and year on median ride duration. 
+```{r}
+duration_plot <- citi_clean %>%
+  mutate(weekdays = factor(weekdays, levels = c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"))) %>%
+  group_by(year, month, weekdays) %>%
+  summarise(median_duration = median(duration)) %>%
+  ggplot(aes(x = weekdays, y = median_duration, fill = month)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  facet_wrap(~year) +
+  labs(title = "Median Ride Duration by Weekday, Month, and Year",
+       x = "Weekday", y = "Median Duration", fill = "Month")
+
+duration_plot
+```
+
+It is obvious that in 2020, the median duration in every combination of month and weekday is greater than that of 2024, this indicates that in 2020, the overall median duration of rides may be longer than that of 2024. For month as a factor, July determines a longer median duration compared with January. In 2020, no matter the month, on Saturdays and Sundays, the median duration are the longest in a week. In July of 2024, the situation is the same.
+
+For data in 2024, make a figure that shows the impact of month, membership status, and bike type on the distribution of ride duration. 
+```{r}
+duration_distribution_plot <- citi_clean %>%
+  filter(year == 2024) %>%
+  ggplot(aes(x = rideable_type, y = duration, fill = member_casual)) +
+  geom_boxplot() +
+  facet_wrap(~month) +
+  labs(title = "Ride Duration Distribution by Month, Membership Status, and Bike Type",
+       x = "Bike Type", y = "Duration", fill = "Membership Status")
+
+duration_distribution_plot
+```
+  
+The boxplots of January and July look similar, so month may not affect the ride duration distribution. However, we can conclude that casual riders tend to ride both types of bikes longer than Citi Bike members. Moreover, for Citi Bike members, their ride duration for electric bikes is longer than that for classic bikes, but for casual riders, their ride duration for classic bikes is longer than that for electric bikes.
